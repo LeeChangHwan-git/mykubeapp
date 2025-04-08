@@ -1,0 +1,15 @@
+# Go 빌드 결과물 무시
+/bin/
+/*.exe
+/*.dll
+/*.so
+/*.dylib
+*.test
+*.out
+
+# 의존성 캐시
+/pkg/
+
+# IDE 설정 파일 (예: VSCode)
+.vscode/
+.idea/
