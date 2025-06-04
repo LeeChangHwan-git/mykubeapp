@@ -1,62 +1,57 @@
 package main
 
 import (
-	"fmt"
+	"github.com/gorilla/mux"
 	"log"
-	"mykubeapp/git"
+	"mykubeapp/controller"
+	"net/http"
 )
 
 func main() {
-	//// Kubeconfig 로드
-	//config, err := clientcmd.BuildConfigFromFlags("", clientcmd.RecommendedHomeFile)
-	//if err != nil {
-	//	panic(err)
-	//}
-	//
-	//// Dump로 내용 출력
-	//spew.Dump(config)
-	//
-	//// 클라이언트 생성
-	//clientset, err := kubernetes.NewForConfig(config)
-	//if err != nil {
-	//	panic(err)
-	//}
-	//
-	//// 네임스페이스 생성
-	//ns := "demo-namespace"
-	//_, err = clientset.CoreV1().Namespaces().Create(context.TODO(), &corev1.Namespace{
-	//	ObjectMeta: metav1.ObjectMeta{
-	//		Name: ns,
-	//	},
-	//}, metav1.CreateOptions{})
-	//
-	//if err != nil {
-	//	panic(err)
-	//}
-	//
-	//fmt.Println("✅ 네임스페이스 생성 완료:", ns)
+	// Spring Boot의 SpringApplication.run() 역할
+	log.Println("🚀 쿠버네티스 관리 애플리케이션 시작...")
 
-	// GitHub 클라이언트 생성 (토큰 없이 공개 API 사용)
-	client := git.NewClient("")
+	// 라우터 생성 (Spring의 @RequestMapping 역할)
+	router := mux.NewRouter()
 
-	// 사용자 정보 가져오기
-	user, err := client.GetUser("octocat")
-	if err != nil {
-		log.Fatal(err)
+	// API 라우팅 설정
+	setupRoutes(router)
+
+	// 서버 시작 (기본적으로 8080 포트)
+	port := ":8080"
+	log.Printf("🌐 서버가 포트 %s에서 실행 중입니다", port)
+	log.Printf("📚 API 문서: http://localhost%s/health", port)
+
+	// HTTP 서버 시작
+	if err := http.ListenAndServe(port, router); err != nil {
+		log.Fatal("❌ 서버 시작 실패:", err)
 	}
+}
 
-	fmt.Printf("사용자: %s\n", *user.Login)
-	fmt.Printf("이름: %s\n", user.GetName())
-	fmt.Printf("팔로워: %d\n", user.GetFollowers())
+func setupRoutes(router *mux.Router) {
+	// 컨트롤러 인스턴스 생성
+	kubeController := controller.NewKubeController()
 
-	// 레포지토리 목록 가져오기
-	repos, err := client.GetUserRepos("octocat")
-	if err != nil {
-		log.Fatal(err)
-	}
+	// API 라우트 설정 (Spring의 @RequestMapping과 유사)
+	api := router.PathPrefix("/api").Subrouter()
 
-	fmt.Printf("\n레포지토리 목록:\n")
-	for _, repo := range repos {
-		fmt.Printf("- %s: %s\n", *repo.Name, repo.GetDescription())
-	}
+	// Health check endpoint
+	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"UP","message":"쿠버네티스 관리 애플리케이션이 정상 동작 중입니다"}`))
+	}).Methods("GET")
+
+	// 쿠버네티스 관련 API
+	api.HandleFunc("/config", kubeController.GetConfig).Methods("GET")        // 현재 config 조회
+	api.HandleFunc("/config", kubeController.AddConfig).Methods("POST")       // config 추가
+	api.HandleFunc("/contexts", kubeController.GetContexts).Methods("GET")    // context 목록 조회
+	api.HandleFunc("/context/use", kubeController.UseContext).Methods("POST") // context 변경
+
+	log.Println("📋 등록된 라우트:")
+	log.Println("  GET  /health         - 헬스 체크")
+	log.Println("  GET  /api/config     - 현재 kube config 조회")
+	log.Println("  POST /api/config     - 새로운 config 추가")
+	log.Println("  GET  /api/contexts   - context 목록 조회")
+	log.Println("  POST /api/context/use - context 변경")
 }

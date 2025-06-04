@@ -1,0 +1,157 @@
+### 쿠버네티스 관리 애플리케이션 API 테스트
+
+### 1. 헬스 체크
+GET http://localhost:8080/health
+Accept: application/json
+
+###
+
+### 2. 현재 kube config 조회
+GET http://localhost:8080/api/config
+Accept: application/json
+
+###
+
+### 3. Context 목록 조회
+GET http://localhost:8080/api/contexts
+Accept: application/json
+
+###
+
+### 4. 새로운 config 추가 (예제 1 - 기본)
+POST http://localhost:8080/api/config
+Content-Type: application/json
+
+{
+  "clusterName": "my-test-cluster",
+  "server": "https://kubernetes-api.example.com:6443",
+  "contextName": "my-test-context",
+  "user": "my-test-user",
+  "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjRmNTc..."
+}
+
+###
+
+### 5. 새로운 config 추가 (예제 2 - 로컬 환경)
+POST http://localhost:8080/api/config
+Content-Type: application/json
+
+{
+  "clusterName": "minikube",
+  "server": "https://127.0.0.1:8443",
+  "contextName": "minikube-context",
+  "user": "minikube-user",
+  "token": "sample-token-for-testing"
+}
+
+###
+
+### 6. Context 변경 (minikube 사용)
+POST http://localhost:8080/api/context/use
+Content-Type: application/json
+
+{
+  "contextName": "minikube"
+}
+
+###
+
+### 7. Context 변경 (사용자 정의 context 사용)
+POST http://localhost:8080/api/context/use
+Content-Type: application/json
+
+{
+  "contextName": "my-test-context"
+}
+
+### 7.1 docker-desktop 변경 (사용자 정의 docker-desktop 사용)
+POST http://localhost:8080/api/context/use
+Content-Type: application/json
+
+{
+  "contextName": "docker-desktop"
+}
+###
+
+### 8. 잘못된 요청 테스트 (필수 필드 누락)
+POST http://localhost:8080/api/config
+Content-Type: application/json
+
+{
+  "clusterName": "incomplete-cluster"
+}
+
+###
+
+### 9. 존재하지 않는 context 변경 시도
+POST http://localhost:8080/api/context/use
+Content-Type: application/json
+
+{
+  "contextName": "non-existent-context"
+}
+
+###
+
+### 변수를 사용한 요청 (GoLand HTTP Client 환경변수)
+
+### 환경변수 설정
+# @name = localhost
+# @port = 8080
+# @baseUrl = http://{{name}}:{{port}}
+
+### 변수를 사용한 헬스 체크
+GET {{baseUrl}}/health
+Accept: application/json
+
+###
+
+### 변수를 사용한 config 조회
+GET {{baseUrl}}/api/config
+Accept: application/json
+
+###
+
+### 개발/운영 환경별 테스트
+
+### [DEV] 개발 환경 테스트
+POST http://localhost:8080/api/config
+Content-Type: application/json
+
+{
+  "clusterName": "dev-cluster",
+  "server": "https://dev-k8s.company.com:6443",
+  "contextName": "dev-context",
+  "user": "dev-user",
+  "token": "dev-token-here"
+}
+
+###
+
+### [STAGE] 스테이징 환경 테스트
+POST http://localhost:8080/api/config
+Content-Type: application/json
+
+{
+  "clusterName": "staging-cluster",
+  "server": "https://staging-k8s.company.com:6443",
+  "contextName": "staging-context",
+  "user": "staging-user",
+  "token": "staging-token-here"
+}
+
+###
+
+### [PROD] 운영 환경 테스트 (주의!)
+POST http://localhost:8080/api/config
+Content-Type: application/json
+
+{
+  "clusterName": "prod-cluster",
+  "server": "https://prod-k8s.company.com:6443",
+  "contextName": "prod-context",
+  "user": "prod-user",
+  "token": "prod-token-here"
+}
+
+###
