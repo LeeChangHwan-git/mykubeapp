@@ -16,7 +16,17 @@ Accept: application/json
 GET http://localhost:8080/api/contexts
 Accept: application/json
 
-###
+### 3.1 Context 삭제
+DELETE http://localhost:8080/api/context
+Content-Type: application/json
+
+{
+  "contextName": "my-test-context"
+}
+
+### 3.2 Context 상세정보 조회
+GET http://localhost:8080/api/context/docker-desktop
+Content-Type: application/json
 
 ### 4. 새로운 config 추가 (예제 1 - 기본)
 POST http://localhost:8080/api/config

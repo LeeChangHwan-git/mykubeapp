@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"log"
 	"os"
@@ -103,4 +104,16 @@ func BackupFile(filename string) error {
 
 	log.Printf("✅ 파일 백업 완료: %s -> %s", filename, backupPath)
 	return nil
+}
+
+// ValidateYamlSyntax - YAML 구문 유효성 검사
+func ValidateYamlSyntax(yamlContent string) error {
+	var temp interface{}
+	return yaml.Unmarshal([]byte(yamlContent), &temp)
+}
+
+// SanitizeYamlContent - YAML 내용 정제 (위험한 내용 제거)
+func SanitizeYamlContent(yamlContent string) string {
+	// 기본적인 정제 (필요에 따라 확장 가능)
+	return strings.TrimSpace(yamlContent)
 }

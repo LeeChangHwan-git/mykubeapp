@@ -2,10 +2,13 @@ package service
 
 import (
 	"fmt"
+	"gopkg.in/yaml.v2" // YAML 파싱을 위해 추가 필요
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	"mykubeapp/model"
 	"mykubeapp/utils"
@@ -191,5 +194,311 @@ func (ks *KubeService) UseContext(contextName string) error {
 	}
 
 	log.Printf("✅ Context 변경 완료: %s", contextName)
+	return nil
+}
+
+// DeleteContext - 특정 context 삭제
+func (ks *KubeService) DeleteContext(contextName string) error {
+	log.Printf("🗑️ Context 삭제 요청: %s", contextName)
+
+	// 컨텍스트 이름 검증
+	if strings.TrimSpace(contextName) == "" {
+		return fmt.Errorf("컨텍스트 이름이 비어있습니다")
+	}
+
+	// 현재 사용 중인 컨텍스트인지 확인
+	currentContext, err := utils.ExecuteCommand("kubectl", "config", "current-context")
+	if err == nil {
+		currentContext = strings.TrimSpace(currentContext)
+		if currentContext == contextName {
+			return fmt.Errorf("현재 사용 중인 컨텍스트는 삭제할 수 없습니다: %s", contextName)
+		}
+	}
+
+	// 컨텍스트 존재 여부 확인
+	contexts, err := ks.GetContexts()
+	if err != nil {
+		return fmt.Errorf("컨텍스트 목록 조회 실패: %v", err)
+	}
+
+	contextExists := false
+	for _, ctx := range contexts {
+		if ctx.Name == contextName {
+			contextExists = true
+			break
+		}
+	}
+
+	if !contextExists {
+		return fmt.Errorf("존재하지 않는 컨텍스트입니다: %s", contextName)
+	}
+
+	// 기존 config 백업
+	if utils.FileExists(ks.configPath) {
+		if err := utils.BackupFile(ks.configPath); err != nil {
+			log.Printf("⚠️  백업 실패 (계속 진행): %v", err)
+		}
+	}
+
+	// kubectl config delete-context 명령 실행
+	_, err = utils.ExecuteCommand("kubectl", "config", "delete-context", contextName)
+	if err != nil {
+		return fmt.Errorf("컨텍스트 삭제 실패: %v", err)
+	}
+
+	log.Printf("✅ Context 삭제 완료: %s", contextName)
+	return nil
+}
+
+// GetContextDetail - 특정 context의 상세 정보 조회
+func (ks *KubeService) GetContextDetail(contextName string) (*model.ContextDetail, error) {
+	log.Printf("📋 Context 상세 정보 조회: %s", contextName)
+
+	// 컨텍스트 이름 검증
+	if strings.TrimSpace(contextName) == "" {
+		return nil, fmt.Errorf("컨텍스트 이름이 비어있습니다")
+	}
+
+	// kube config 파일 읽기
+	configContent, err := ks.GetCurrentConfig()
+	if err != nil {
+		return nil, fmt.Errorf("config 파일 읽기 실패: %v", err)
+	}
+
+	// YAML 파싱
+	var kubeConfig model.KubeConfig
+	if err := yaml.Unmarshal([]byte(configContent), &kubeConfig); err != nil {
+		return nil, fmt.Errorf("config 파싱 실패: %v", err)
+	}
+
+	// 현재 컨텍스트 확인
+	currentContext := strings.TrimSpace(kubeConfig.CurrentContext)
+
+	// 요청한 컨텍스트 찾기
+	var targetContext *model.ContextConfig
+	for _, ctx := range kubeConfig.Contexts {
+		if ctx.Name == contextName {
+			targetContext = &ctx
+			break
+		}
+	}
+
+	if targetContext == nil {
+		return nil, fmt.Errorf("컨텍스트를 찾을 수 없습니다: %s", contextName)
+	}
+
+	// 클러스터 정보 찾기
+	var clusterDetail model.ClusterDetail
+	for _, cluster := range kubeConfig.Clusters {
+		if cluster.Name == targetContext.Context.Cluster {
+			clusterDetail = model.ClusterDetail{
+				Name:                    cluster.Name,
+				Server:                  cluster.Cluster.Server,
+				InsecureSkipTLSVerify:   cluster.Cluster.InsecureSkipTLSVerify,
+				HasCertificateAuthority: cluster.Cluster.CertificateAuthorityData != "",
+			}
+			break
+		}
+	}
+
+	// 사용자 정보 찾기
+	var userDetail model.UserDetail
+	for _, user := range kubeConfig.Users {
+		if user.Name == targetContext.Context.User {
+			authMethod := ks.determineAuthMethod(user.User)
+			userDetail = model.UserDetail{
+				Name:                 user.Name,
+				HasToken:             user.User.Token != "",
+				HasClientCertificate: user.User.ClientCertificateData != "",
+				HasClientKey:         user.User.ClientKeyData != "",
+				AuthenticationMethod: authMethod,
+			}
+			break
+		}
+	}
+
+	// 컨텍스트 상세 정보 구성
+	contextDetail := &model.ContextDetail{
+		Name:      contextName,
+		IsCurrent: contextName == currentContext,
+		Cluster:   clusterDetail,
+		User:      userDetail,
+		Namespace: targetContext.Context.Namespace,
+	}
+
+	log.Printf("✅ Context 상세 정보 조회 완료: %s", contextName)
+	return contextDetail, nil
+}
+
+// determineAuthMethod - 인증 방식 결정
+func (ks *KubeService) determineAuthMethod(user model.UserConfigData) string {
+	if user.Token != "" {
+		return "Token"
+	}
+	if user.ClientCertificateData != "" && user.ClientKeyData != "" {
+		return "Client Certificate"
+	}
+	if user.ClientCertificateData != "" {
+		return "Certificate Only"
+	}
+	return "None"
+}
+
+// ApplyYaml - YAML 내용을 kubectl apply로 적용
+func (ks *KubeService) ApplyYaml(request model.ApplyYamlRequest) (*model.ApplyYamlResult, error) {
+	log.Printf("🚀 YAML 적용 시작 (DryRun: %t)", request.DryRun)
+
+	// 임시 파일 생성
+	tempFile, err := ks.createTempYamlFile(request.YamlContent)
+	if err != nil {
+		return nil, fmt.Errorf("임시 파일 생성 실패: %v", err)
+	}
+	defer func(name string) {
+		err := os.Remove(name)
+		if err != nil {
+
+		}
+	}(tempFile) // 함수 종료 시 임시 파일 삭제
+
+	// kubectl apply 명령어 구성
+	args := []string{"apply", "-f", tempFile}
+
+	// 네임스페이스 지정
+	if request.Namespace != "" {
+		args = append(args, "-n", request.Namespace)
+	}
+
+	// dry-run 모드
+	if request.DryRun {
+		args = append(args, "--dry-run=client")
+	}
+
+	// 상세 출력
+	args = append(args, "-v=0")
+
+	// kubectl 명령 실행
+	output, err := utils.ExecuteCommand("kubectl", args...)
+	if err != nil {
+		return nil, fmt.Errorf("kubectl apply 실패: %v", err)
+	}
+
+	// 적용된 리소스 목록 추출
+	resources := ks.extractResourcesFromOutput(output)
+
+	result := &model.ApplyYamlResult{
+		Output:      output,
+		AppliedTime: time.Now().Format("2006-01-02 15:04:05"),
+		Resources:   resources,
+		DryRun:      request.DryRun,
+	}
+
+	if request.DryRun {
+		log.Printf("✅ YAML dry-run 완료")
+	} else {
+		log.Printf("✅ YAML 적용 완료 (리소스 수: %d)", len(resources))
+	}
+
+	return result, nil
+}
+
+// DeleteYaml - YAML 내용을 kubectl delete로 삭제
+func (ks *KubeService) DeleteYaml(request model.DeleteYamlRequest) (*model.ApplyYamlResult, error) {
+	log.Printf("🗑️ YAML 삭제 시작")
+
+	// 임시 파일 생성
+	tempFile, err := ks.createTempYamlFile(request.YamlContent)
+	if err != nil {
+		return nil, fmt.Errorf("임시 파일 생성 실패: %v", err)
+	}
+	defer func(name string) {
+		err := os.Remove(name)
+		if err != nil {
+
+		}
+	}(tempFile) // 함수 종료 시 임시 파일 삭제
+
+	// kubectl delete 명령어 구성
+	args := []string{"delete", "-f", tempFile}
+
+	// 네임스페이스 지정
+	if request.Namespace != "" {
+		args = append(args, "-n", request.Namespace)
+	}
+
+	// 리소스가 없어도 에러 무시
+	args = append(args, "--ignore-not-found=true")
+
+	// kubectl 명령 실행
+	output, err := utils.ExecuteCommand("kubectl", args...)
+	if err != nil {
+		return nil, fmt.Errorf("kubectl delete 실패: %v", err)
+	}
+
+	// 삭제된 리소스 목록 추출
+	resources := ks.extractResourcesFromOutput(output)
+
+	result := &model.ApplyYamlResult{
+		Output:      output,
+		AppliedTime: time.Now().Format("2006-01-02 15:04:05"),
+		Resources:   resources,
+		DryRun:      false,
+	}
+
+	log.Printf("✅ YAML 삭제 완료 (리소스 수: %d)", len(resources))
+	return result, nil
+}
+
+// createTempYamlFile - 임시 YAML 파일 생성
+func (ks *KubeService) createTempYamlFile(yamlContent string) (string, error) {
+	// 임시 디렉토리에 파일 생성
+	tempDir := os.TempDir()
+	tempFile := filepath.Join(tempDir, fmt.Sprintf("kubectl-apply-%d.yaml", time.Now().UnixNano()))
+
+	// YAML 내용을 파일에 쓰기
+	err := os.WriteFile(tempFile, []byte(yamlContent), 0644)
+	if err != nil {
+		return "", fmt.Errorf("임시 파일 쓰기 실패: %v", err)
+	}
+
+	log.Printf("📝 임시 YAML 파일 생성: %s", tempFile)
+	return tempFile, nil
+}
+
+// extractResourcesFromOutput - kubectl 출력에서 리소스 목록 추출
+func (ks *KubeService) extractResourcesFromOutput(output string) []string {
+	var resources []string
+
+	// kubectl 출력에서 "리소스타입/이름 action" 패턴 찾기
+	// 예: "deployment.apps/my-app created", "service/my-service configured"
+	re := regexp.MustCompile(`([a-zA-Z0-9.\-/]+)\s+(created|configured|unchanged|deleted)`)
+	matches := re.FindAllStringSubmatch(output, -1)
+
+	for _, match := range matches {
+		if len(match) >= 2 {
+			resources = append(resources, match[1])
+		}
+	}
+
+	// 중복 제거
+	seen := make(map[string]bool)
+	var uniqueResources []string
+	for _, resource := range resources {
+		if !seen[resource] {
+			seen[resource] = true
+			uniqueResources = append(uniqueResources, resource)
+		}
+	}
+
+	return uniqueResources
+}
+
+// ValidateYaml - YAML 구문 검증 (선택적으로 사용 가능)
+func (ks *KubeService) ValidateYaml(yamlContent string) error {
+	// 기본적인 YAML 구문 검증
+	var temp interface{}
+	err := yaml.Unmarshal([]byte(yamlContent), &temp)
+	if err != nil {
+		return fmt.Errorf("잘못된 YAML 형식: %v", err)
+	}
 	return nil
 }
