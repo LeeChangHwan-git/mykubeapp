@@ -115,6 +115,8 @@ GET {{baseUrl}}/health
 Accept: application/json
 
 ###
+GET localhost:8080/api/ai/health
+Accept: application/json
 
 ### 변수를 사용한 config 조회
 GET {{baseUrl}}/api/config

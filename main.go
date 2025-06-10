@@ -55,6 +55,7 @@ func setupRoutes(router *mux.Router) {
 	// 컨트롤러 인스턴스 생성
 	kubeController := controller.NewKubeController()
 	terminalController := controller.NewTerminalController()
+	aiController := controller.NewAIController() // AI 컨트롤러 추가
 
 	// API 라우트 설정 (Spring의 @RequestMapping과 유사)
 	api := router.PathPrefix("/api").Subrouter()
@@ -77,6 +78,13 @@ func setupRoutes(router *mux.Router) {
 	api.HandleFunc("/delete", kubeController.DeleteYaml).Methods("POST", "OPTIONS")                     // YAML 삭제
 	api.HandleFunc("/kubectl", terminalController.KubectlTerminal)                                      // WebSocket endpoint
 
+	// AI 관련 API 추가
+	api.HandleFunc("/ai/health", aiController.CheckAIHealth).Methods("GET", "OPTIONS")             // AI 서비스 상태 확인
+	api.HandleFunc("/ai/generate-yaml", aiController.GenerateYaml).Methods("POST", "OPTIONS")      // AI YAML 생성
+	api.HandleFunc("/ai/generate-apply", aiController.GenerateAndApply).Methods("POST", "OPTIONS") // AI YAML 생성 및 적용
+	api.HandleFunc("/ai/query", aiController.QueryAI).Methods("POST", "OPTIONS")                   // AI 질문
+	api.HandleFunc("/ai/template", aiController.GenerateTemplate).Methods("POST", "OPTIONS")       // 템플릿 기반 생성
+
 	log.Println("📋 등록된 라우트:")
 	log.Println("  GET    /health                    - 헬스 체크")
 	log.Println("  GET    /api/config                - 현재 kube config 조회")
@@ -88,6 +96,12 @@ func setupRoutes(router *mux.Router) {
 	log.Println("  POST   /api/apply                 - YAML 적용")
 	log.Println("  POST   /api/delete                - YAML 삭제")
 	log.Println("  WS     /api/kubectl               - Kubectl 웹터미널")
+	log.Println("")
+	log.Println("🤖 AI 관련 라우트:")
+	log.Println("  GET    /api/ai/health             - AI 서비스 상태 확인")
+	log.Println("  POST   /api/ai/generate-yaml      - AI로 YAML 생성")
+	log.Println("  POST   /api/ai/generate-apply     - AI로 YAML 생성 후 적용")
+	log.Println("  POST   /api/ai/query              - AI에게 질문하기")
+	log.Println("  POST   /api/ai/template           - 템플릿 기반 YAML 생성")
 	log.Println("✅ CORS 미들웨어 적용 완료 (모든 라우트에 OPTIONS 지원)")
-
 }
