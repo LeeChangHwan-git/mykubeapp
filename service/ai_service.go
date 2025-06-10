@@ -26,7 +26,7 @@ func NewAIService(deepseekURL string) *AIService {
 	return &AIService{
 		baseURL: deepseekURL,
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: 120 * time.Second,
 		},
 		kubeService: NewKubeService(),
 	}
@@ -166,21 +166,41 @@ func (ai *AIService) GenerateAndApplyYaml(request model.AIApplyRequest) (*model.
 // QueryKubernetesAI - Kubernetes 관련 질문을 AI에게 물어보기
 func (ai *AIService) QueryKubernetesAI(request model.AIQueryRequest) (*model.AIQueryResponse, error) {
 	log.Printf("💬 AI 쿠버네티스 질문: %s", request.Question)
-
-	// 현재 클러스터 정보 수집 (컨텍스트 제공)
-	contexts, _ := ai.kubeService.GetContexts()
+	// 현재 클러스터 정보 수집 (타임아웃 방지를 위해 간소화)
 	var currentContext string
-	for _, ctx := range contexts {
-		if ctx.IsCurrent {
-			currentContext = ctx.Name
-			break
+
+	// 컨텍스트 조회를 고루틴으로 처리하여 타임아웃 방지
+	contextChan := make(chan string, 1)
+	go func() {
+		contexts, err := ai.kubeService.GetContexts()
+		if err != nil {
+			log.Printf("⚠️ 컨텍스트 조회 실패 (무시하고 계속): %v", err)
+			contextChan <- "unknown"
+			return
 		}
+
+		for _, ctx := range contexts {
+			if ctx.IsCurrent {
+				contextChan <- ctx.Name
+				return
+			}
+		}
+		contextChan <- "default"
+	}()
+
+	// 3초 내에 컨텍스트 조회 완료되지 않으면 기본값 사용
+	select {
+	case currentContext = <-contextChan:
+		log.Printf("✅ 현재 컨텍스트: %s", currentContext)
+	case <-time.After(3 * time.Second):
+		currentContext = "unknown"
+		log.Printf("⚠️ 컨텍스트 조회 타임아웃, 기본값 사용")
 	}
 
-	// AI 프롬프트 구성
-	systemPrompt := `You are a Kubernetes expert assistant. Answer questions about Kubernetes with practical, actionable advice.
+	// AI 프롬프트 구성 (더 간결하게)
+	systemPrompt := `You are a Kubernetes expert assistant. Answer questions about Kubernetes clearly and concisely.
 Current cluster context: ` + currentContext + `
-Provide clear, concise answers with examples when helpful.`
+Provide practical, actionable advice with examples when helpful.`
 
 	aiRequest := model.DeepSeekRequest{
 		Model: "deepseek-coder-v2:16b",
@@ -195,15 +215,17 @@ Provide clear, concise answers with examples when helpful.`
 			},
 		},
 		Temperature: 0.3,
-		MaxTokens:   1024,
+		MaxTokens:   800, // 1024 → 800으로 줄여서 응답 속도 향상
 		Stream:      false,
 	}
 
 	// AI API 호출
+	log.Printf("🌐 AI API 질문 요청 시작...")
 	answer, err := ai.callDeepSeekAPI(aiRequest)
 	if err != nil {
 		return nil, fmt.Errorf("AI API 호출 실패: %v", err)
 	}
+	log.Printf("✅ AI API 질문 응답 완료")
 
 	response := &model.AIQueryResponse{
 		BaseResponse: model.BaseResponse{
