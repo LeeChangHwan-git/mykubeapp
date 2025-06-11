@@ -55,7 +55,8 @@ func setupRoutes(router *mux.Router) {
 	// 컨트롤러 인스턴스 생성
 	kubeController := controller.NewKubeController()
 	terminalController := controller.NewTerminalController()
-	aiController := controller.NewAIController() // AI 컨트롤러 추가
+	aiController := controller.NewAIController()
+	gitController := controller.NewGitController() // Git 컨트롤러 추가
 
 	// API 라우트 설정 (Spring의 @RequestMapping과 유사)
 	api := router.PathPrefix("/api").Subrouter()
@@ -68,22 +69,31 @@ func setupRoutes(router *mux.Router) {
 	}).Methods("GET")
 
 	// 쿠버네티스 관련 API
-	api.HandleFunc("/config", kubeController.GetConfig).Methods("GET", "OPTIONS")                       // 현재 config 조회
-	api.HandleFunc("/config", kubeController.AddConfig).Methods("POST", "OPTIONS")                      // config 추가
-	api.HandleFunc("/contexts", kubeController.GetContexts).Methods("GET", "OPTIONS")                   // context 목록 조회
-	api.HandleFunc("/context/use", kubeController.UseContext).Methods("POST", "OPTIONS")                // context 변경
-	api.HandleFunc("/context", kubeController.DeleteContext).Methods("DELETE", "OPTIONS")               // context 삭제
-	api.HandleFunc("/context/{contextName}", kubeController.GetContextDetail).Methods("GET", "OPTIONS") // context 상세 정보 조회
-	api.HandleFunc("/apply", kubeController.ApplyYaml).Methods("POST", "OPTIONS")                       // YAML 적용
-	api.HandleFunc("/delete", kubeController.DeleteYaml).Methods("POST", "OPTIONS")                     // YAML 삭제
-	api.HandleFunc("/kubectl", terminalController.KubectlTerminal)                                      // WebSocket endpoint
+	api.HandleFunc("/config", kubeController.GetConfig).Methods("GET", "OPTIONS")
+	api.HandleFunc("/config", kubeController.AddConfig).Methods("POST", "OPTIONS")
+	api.HandleFunc("/contexts", kubeController.GetContexts).Methods("GET", "OPTIONS")
+	api.HandleFunc("/context/use", kubeController.UseContext).Methods("POST", "OPTIONS")
+	api.HandleFunc("/context", kubeController.DeleteContext).Methods("DELETE", "OPTIONS")
+	api.HandleFunc("/context/{contextName}", kubeController.GetContextDetail).Methods("GET", "OPTIONS")
+	api.HandleFunc("/apply", kubeController.ApplyYaml).Methods("POST", "OPTIONS")
+	api.HandleFunc("/delete", kubeController.DeleteYaml).Methods("POST", "OPTIONS")
+	api.HandleFunc("/kubectl", terminalController.KubectlTerminal)
 
-	// AI 관련 API 추가
-	api.HandleFunc("/ai/health", aiController.CheckAIHealth).Methods("GET", "OPTIONS")             // AI 서비스 상태 확인
-	api.HandleFunc("/ai/generate-yaml", aiController.GenerateYaml).Methods("POST", "OPTIONS")      // AI YAML 생성
-	api.HandleFunc("/ai/generate-apply", aiController.GenerateAndApply).Methods("POST", "OPTIONS") // AI YAML 생성 및 적용
-	api.HandleFunc("/ai/query", aiController.QueryAI).Methods("POST", "OPTIONS")                   // AI 질문
-	api.HandleFunc("/ai/template", aiController.GenerateTemplate).Methods("POST", "OPTIONS")       // 템플릿 기반 생성
+	// AI 관련 API
+	api.HandleFunc("/ai/health", aiController.CheckAIHealth).Methods("GET", "OPTIONS")
+	api.HandleFunc("/ai/generate-yaml", aiController.GenerateYaml).Methods("POST", "OPTIONS")
+	api.HandleFunc("/ai/generate-apply", aiController.GenerateAndApplyEnhanced).Methods("POST", "OPTIONS") // 🆕 Enhanced 버전 사용
+	api.HandleFunc("/ai/query", aiController.QueryAI).Methods("POST", "OPTIONS")
+	api.HandleFunc("/ai/template", aiController.GenerateTemplate).Methods("POST", "OPTIONS")
+	api.HandleFunc("/ai/validate", aiController.ValidateYaml).Methods("POST", "OPTIONS")
+	api.HandleFunc("/ai/examples", aiController.GetAIExamples).Methods("GET", "OPTIONS")
+	api.HandleFunc("/ai/git", aiController.ProcessGitCommand).Methods("POST", "OPTIONS") // 🆕 Git 전용 엔드포인트 추가
+
+	// 🆕 Git 관련 API 추가
+	api.HandleFunc("/git/yaml", gitController.GetYamlFromGit).Methods("POST", "OPTIONS")    // Git에서 YAML 조회
+	api.HandleFunc("/git/apply", gitController.ApplyYamlFromGit).Methods("POST", "OPTIONS") // Git에서 YAML 적용
+	api.HandleFunc("/git/ai", gitController.ProcessGitWithAI).Methods("POST", "OPTIONS")    // AI를 통한 Git 연동
+	api.HandleFunc("/git/cleanup", gitController.CleanupGitTemp).Methods("GET", "OPTIONS")  // Git 임시 파일 정리
 
 	log.Println("📋 등록된 라우트:")
 	log.Println("  GET    /health                    - 헬스 체크")
@@ -100,8 +110,17 @@ func setupRoutes(router *mux.Router) {
 	log.Println("🤖 AI 관련 라우트:")
 	log.Println("  GET    /api/ai/health             - AI 서비스 상태 확인")
 	log.Println("  POST   /api/ai/generate-yaml      - AI로 YAML 생성")
-	log.Println("  POST   /api/ai/generate-apply     - AI로 YAML 생성 후 적용")
+	log.Println("  POST   /api/ai/generate-apply     - AI로 YAML 생성 후 적용 (Git 자동감지)")
 	log.Println("  POST   /api/ai/query              - AI에게 질문하기")
 	log.Println("  POST   /api/ai/template           - 템플릿 기반 YAML 생성")
+	log.Println("  POST   /api/ai/validate           - AI YAML 검증")
+	log.Println("  POST   /api/ai/git                - AI Git 전용 처리")
+	log.Println("  GET    /api/ai/examples           - AI 사용 예제")
+	log.Println("")
+	log.Println("📦 Git 관련 라우트:")
+	log.Println("  POST   /api/git/yaml             - Git 레포지토리 YAML 조회")
+	log.Println("  POST   /api/git/apply            - Git 레포지토리 YAML 적용")
+	log.Println("  POST   /api/git/ai               - AI를 통한 Git 연동")
+	log.Println("  GET    /api/git/cleanup          - Git 임시 파일 정리")
 	log.Println("✅ CORS 미들웨어 적용 완료 (모든 라우트에 OPTIONS 지원)")
 }

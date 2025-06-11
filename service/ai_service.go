@@ -453,3 +453,317 @@ Rules:
 	log.Printf("✅ AI 삭제 명령어 처리 완료 (성공: %d개)", len(successResources))
 	return response, nil
 }
+
+// CallDeepSeekAPI - 외부에서 호출 가능한 DeepSeek API 메서드 (Git Controller에서 사용)
+func (ai *AIService) CallDeepSeekAPI(request model.DeepSeekRequest) (string, error) {
+	return ai.callDeepSeekAPI(request)
+}
+
+// ProcessGitPrompt - Git 관련 프롬프트 처리 (개선된 버전)
+func (ai *AIService) ProcessGitPrompt(prompt string) (*model.AIGitResponse, error) {
+	log.Printf("🤖 Git 프롬프트 처리: %s", prompt)
+
+	// Git 관련 키워드 감지
+	gitKeywords := []string{"레포지토리", "레포", "repository", "repo", "github", "gitlab", "bitbucket", "git"}
+	isGitRelated := false
+
+	lowerPrompt := strings.ToLower(prompt)
+	for _, keyword := range gitKeywords {
+		if strings.Contains(lowerPrompt, keyword) {
+			isGitRelated = true
+			break
+		}
+	}
+
+	if !isGitRelated {
+		return nil, fmt.Errorf("Git 관련 프롬프트가 아닙니다")
+	}
+
+	// Git 프롬프트 파싱을 위한 AI 요청
+	systemPrompt := `You are a Git repository parser for Kubernetes operations. 
+Parse user requests and extract Git repository information.
+
+IMPORTANT: Return ONLY a valid JSON object, no markdown formatting, no code blocks, no explanations.
+
+Required JSON format:
+{
+  "repoUrl": "https://github.com/user/repo.git",
+  "branch": "main",
+  "filename": "deployment.yaml",
+  "action": "apply",
+  "dryRun": false,
+  "namespace": "",
+  "confidence": 0.95
+}
+
+Rules:
+1. repoUrl: Add https:// if missing, add .git if missing
+2. branch: Default "main" if not specified
+3. filename: Specific file name if mentioned, empty string if not
+4. action: "apply" for 적용/배포/생성, "show" for 보기/표시/조회
+5. dryRun: true if dry-run/테스트/시뮬레이션 mentioned
+6. namespace: Kubernetes namespace if specified
+7. confidence: 0.0-1.0 based on parsing certainty`
+
+	aiRequest := model.DeepSeekRequest{
+		Model: "deepseek-coder-v2:16b",
+		Messages: []model.DeepSeekMessage{
+			{
+				Role:    "system",
+				Content: systemPrompt,
+			},
+			{
+				Role:    "user",
+				Content: prompt,
+			},
+		},
+		Temperature: 0.1,
+		MaxTokens:   200,
+		Stream:      false,
+	}
+
+	// AI API 호출
+	response, err := ai.callDeepSeekAPI(aiRequest)
+	if err != nil {
+		return nil, fmt.Errorf("AI API 호출 실패: %v", err)
+	}
+
+	log.Printf("🤖 AI 원본 응답: %s", response)
+
+	// AI 응답 정제
+	cleanedResponse := ai.cleanAIResponse(response)
+
+	// JSON 파싱
+	var parseResult model.GitParseResult
+	if err := json.Unmarshal([]byte(cleanedResponse), &parseResult); err != nil {
+		// JSON 파싱 실패 시 기본값으로 처리
+		log.Printf("⚠️ JSON 파싱 실패, 기본 파싱 사용: %v", err)
+		parseResult = ai.fallbackParseGitPrompt(prompt)
+	}
+
+	// URL 정규화
+	if parseResult.RepoURL != "" {
+		parseResult.RepoURL = ai.normalizeRepoURL(parseResult.RepoURL)
+	}
+
+	// 응답 구성
+	aiGitResponse := &model.AIGitResponse{
+		BaseResponse: model.BaseResponse{
+			Success: true,
+			Message: "Git 프롬프트 파싱 완료",
+		},
+		Data: model.AIGitData{
+			ParsedRequest: parseResult,
+			RepoURL:       parseResult.RepoURL,
+			Branch:        parseResult.Branch,
+			Filename:      parseResult.Filename,
+			Action:        parseResult.Action,
+			ProcessedTime: time.Now().Format("2006-01-02 15:04:05"),
+		},
+	}
+
+	return aiGitResponse, nil
+}
+
+// normalizeRepoURL - 레포지토리 URL 정규화
+func (ai *AIService) normalizeRepoURL(repoURL string) string {
+	// https:// 접두사 추가
+	if !strings.HasPrefix(repoURL, "http://") && !strings.HasPrefix(repoURL, "https://") {
+		repoURL = "https://" + repoURL
+	}
+
+	// .git 접미사 추가
+	if !strings.HasSuffix(repoURL, ".git") {
+		repoURL = repoURL + ".git"
+	}
+
+	return repoURL
+}
+
+// cleanAIResponse - AI 응답에서 JSON 추출 및 정제
+func (ai *AIService) cleanAIResponse(response string) string {
+	// 마크다운 코드 블록 제거
+	response = strings.ReplaceAll(response, "```json", "")
+	response = strings.ReplaceAll(response, "```", "")
+
+	// 앞뒤 공백 제거
+	response = strings.TrimSpace(response)
+
+	// JSON 시작/끝 찾기
+	startIdx := strings.Index(response, "{")
+	endIdx := strings.LastIndex(response, "}")
+
+	if startIdx != -1 && endIdx != -1 && endIdx > startIdx {
+		response = response[startIdx : endIdx+1]
+	}
+
+	log.Printf("🔧 AI 응답 정제 결과: %s", response)
+	return response
+}
+
+// fallbackParseGitPrompt - AI 파싱 실패 시 폴백 파싱
+func (ai *AIService) fallbackParseGitPrompt(prompt string) model.GitParseResult {
+	log.Println("🔄 폴백 Git 프롬프트 파싱 사용")
+
+	result := model.GitParseResult{
+		Branch:     "main",
+		DryRun:     false,
+		Confidence: 0.5,
+	}
+
+	lowerPrompt := strings.ToLower(prompt)
+
+	// 액션 감지
+	applyKeywords := []string{"적용", "배포", "생성", "apply", "deploy", "create"}
+	showKeywords := []string{"보여", "표시", "조회", "show", "display", "list"}
+
+	for _, keyword := range applyKeywords {
+		if strings.Contains(lowerPrompt, keyword) {
+			result.Action = "apply"
+			break
+		}
+	}
+
+	if result.Action == "" {
+		for _, keyword := range showKeywords {
+			if strings.Contains(lowerPrompt, keyword) {
+				result.Action = "show"
+				break
+			}
+		}
+	}
+
+	// 기본값
+	if result.Action == "" {
+		result.Action = "show"
+	}
+
+	// DryRun 감지
+	dryRunKeywords := []string{"dry-run", "dryrun", "테스트", "시뮬레이션", "test"}
+	for _, keyword := range dryRunKeywords {
+		if strings.Contains(lowerPrompt, keyword) {
+			result.DryRun = true
+			break
+		}
+	}
+
+	// 간단한 URL 추출 (개선 필요)
+	words := strings.Fields(prompt)
+	for _, word := range words {
+		if strings.Contains(word, "github.com") || strings.Contains(word, "gitlab.com") || strings.Contains(word, "bitbucket.org") {
+			if !strings.HasPrefix(word, "http") {
+				word = "https://" + word
+			}
+			if !strings.HasSuffix(word, ".git") {
+				word = word + ".git"
+			}
+			result.RepoURL = word
+			break
+		}
+	}
+
+	// 파일명 추출 (.yaml, .yml 파일)
+	for _, word := range words {
+		if strings.HasSuffix(word, ".yaml") || strings.HasSuffix(word, ".yml") {
+			result.Filename = word
+			break
+		}
+	}
+
+	return result
+}
+
+// GenerateGitYamlWithAI - AI로 Git에서 가져온 YAML 분석 및 설명
+func (ai *AIService) GenerateGitYamlWithAI(yamlFiles []model.GitYamlFile, action string) (*model.AIYamlResponse, error) {
+	log.Printf("🤖 Git YAML AI 분석: %d개 파일, 액션: %s", len(yamlFiles), action)
+
+	if len(yamlFiles) == 0 {
+		return nil, fmt.Errorf("분석할 YAML 파일이 없습니다")
+	}
+
+	// YAML 파일들 요약
+	var yamlSummary strings.Builder
+	yamlSummary.WriteString("발견된 Kubernetes YAML 파일들:\n")
+
+	for i, file := range yamlFiles {
+		if i >= 5 { // 최대 5개 파일만 요약
+			yamlSummary.WriteString(fmt.Sprintf("... 그 외 %d개 파일\n", len(yamlFiles)-5))
+			break
+		}
+		yamlSummary.WriteString(fmt.Sprintf("- %s (%d bytes)\n", file.Path, file.Size))
+
+		// 첫 번째 파일의 내용 일부 포함
+		if i == 0 && len(file.Content) > 0 {
+			lines := strings.Split(file.Content, "\n")
+			yamlSummary.WriteString("  내용 미리보기:\n")
+			for j, line := range lines {
+				if j >= 10 { // 최대 10줄만
+					yamlSummary.WriteString("  ...\n")
+					break
+				}
+				yamlSummary.WriteString(fmt.Sprintf("  %s\n", line))
+			}
+		}
+	}
+
+	// AI 프롬프트 구성
+	var systemPrompt string
+	if action == "apply" {
+		systemPrompt = `You are a Kubernetes expert. Analyze the provided YAML files and provide:
+1. Summary of what will be created/applied
+2. Potential issues or warnings
+3. Recommended namespace if not specified
+4. Dependencies between resources
+5. Estimated resource requirements
+
+Be concise but thorough in your analysis.`
+	} else {
+		systemPrompt = `You are a Kubernetes expert. Analyze the provided YAML files and provide:
+1. Overview of the Kubernetes resources
+2. Architecture explanation
+3. Purpose and functionality of each component
+4. Best practices assessment
+5. Suggestions for improvement
+
+Be educational and helpful in your explanation.`
+	}
+
+	aiRequest := model.DeepSeekRequest{
+		Model: "deepseek-coder-v2:16b",
+		Messages: []model.DeepSeekMessage{
+			{
+				Role:    "system",
+				Content: systemPrompt,
+			},
+			{
+				Role:    "user",
+				Content: yamlSummary.String(),
+			},
+		},
+		Temperature: 0.3,
+		MaxTokens:   1000,
+		Stream:      false,
+	}
+
+	// AI API 호출
+	analysis, err := ai.callDeepSeekAPI(aiRequest)
+	if err != nil {
+		return nil, fmt.Errorf("AI 분석 실패: %v", err)
+	}
+
+	// 응답 구성
+	response := &model.AIYamlResponse{
+		BaseResponse: model.BaseResponse{
+			Success: true,
+			Message: "Git YAML AI 분석 완료",
+		},
+		Data: model.AIYamlResult{
+			GeneratedYaml: analysis, // 분석 결과를 GeneratedYaml 필드에 저장
+			Prompt:        fmt.Sprintf("Git 레포지토리 YAML 분석 (%d개 파일)", len(yamlFiles)),
+			GeneratedTime: time.Now().Format("2006-01-02 15:04:05"),
+			Source:        "DeepSeek Coder (Git Analysis)",
+		},
+	}
+
+	return response, nil
+}
